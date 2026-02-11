@@ -186,7 +186,7 @@ export async function POST(req: NextRequest) {
     dailyCallCount++;
 
     const body = await req.json();
-    const { messages, affinity, stage } = body;
+    const { messages, affinity, stage, attachmentType } = body;
 
     // 🛡️ 입력값 검증
     const validationError = validateInput(messages);
@@ -204,7 +204,7 @@ export async function POST(req: NextRequest) {
     // 스테이지별 프롬프트 선택
     const basePrompt = STAGE_PROMPTS[stageKey] || STAGE_PROMPTS['1'];
 
-    // 호감도에 따른 추가 지시
+    // 호감도에 따른 추가 지시 (음수 구간 포함)
     let affinityContext = '';
     if (affinity >= 80) {
       affinityContext = '\n현재 호감도가 매우 높아. 상대를 매우 좋아하고 적극적으로 다정하게 대해.';
@@ -212,11 +212,28 @@ export async function POST(req: NextRequest) {
       affinityContext = '\n현재 호감도가 높아. 상대를 꽤 좋아해. 친근하고 설레는 반응.';
     } else if (affinity >= 30) {
       affinityContext = '\n현재 호감도가 보통. 관심이 생기기 시작. 츤데레하게 반응.';
-    } else {
+    } else if (affinity >= 0) {
       affinityContext = '\n현재 호감도가 낮아. 약간 경계하면서도 호기심.';
+    } else if (affinity >= -15) {
+      affinityContext = '\n현재 호감도가 매우 낮아. 상대에게 실망하고 서운한 상태. 말이 짧아지고 냉랭해.';
+    } else {
+      affinityContext = '\n현재 호감도가 바닥이야. 상대에게 크게 상처받은 상태. 대화를 이어가기 힘들어해.';
     }
 
-    const systemPrompt = basePrompt + affinityContext + JSON_RULE;
+    // 💔 불안형 애착 모드
+    let attachmentContext = '';
+    if (attachmentType === '불안형') {
+      attachmentContext = `\n
+## ⚠️ 현재 애착유형: 불안형
+상대방에게 여러 번 상처를 받아서 불안형 애착으로 변했어.
+- 상대방이 떠날까봐 불안해하고, 계속 확인하려 해
+- "나 싫어해?", "다른 사람 만나는 거 아니지?" 같은 불안한 질문을 가끔 해
+- 기분이 오르락내리락하고, 작은 말에도 크게 반응해
+- 하지만 상대가 진심으로 다정하게 대하면 조금씩 안정을 되찾아
+- 안정을 되찾으면 "...고마워. 네가 그렇게 말해주니까 좀 안심이 돼" 같은 반응`;
+    }
+
+    const systemPrompt = basePrompt + affinityContext + attachmentContext + JSON_RULE;
 
     // 💰 비용 절약: 최근 10개 대화만 전송
     const recentMessages = messages.slice(-10);

@@ -88,15 +88,30 @@ export default function VisualNovelChat() {
   const [isGuest, setIsGuest] = useState(true);
   const [showStageUp, setShowStageUp] = useState(false);
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
+  // 위기 이벤트 상태
+  const [negativeStreak, setNegativeStreak] = useState(0);
+  const [showCrisisEvent, setShowCrisisEvent] = useState(false);
+  const [showGameOver, setShowGameOver] = useState(false);
+  const [attachmentType, setAttachmentType] = useState<'안정형' | '불안형'>('안정형');
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // 호감도 바 색상 (스테이지별)
+  // 호감도 바 색상 (음수 구간 포함)
   const getAffinityColor = () => {
+    if (affinity < 0) return 'bg-gray-600';
     const colors = theme.barColors;
     if (affinity >= 80) return colors[3];
     if (affinity >= 50) return colors[2];
     if (affinity >= 30) return colors[1];
     return colors[0];
+  };
+
+  // 애착 유형 업데이트
+  const updateAttachment = (newAffinity: number) => {
+    if (newAffinity < 0) {
+      setAttachmentType('불안형');
+    } else {
+      setAttachmentType('안정형');
+    }
   };
 
   // 호감도 변동 팝업
@@ -241,7 +256,7 @@ export default function VisualNovelChat() {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: apiMessages, affinity, stage }),
+        body: JSON.stringify({ messages: apiMessages, affinity, stage, attachmentType }),
       });
 
       const data = await res.json();
@@ -266,12 +281,29 @@ export default function VisualNovelChat() {
         // 감정 업데이트
         setCurrentEmotion(data.emotion || 'neutral');
 
-        // 호감도 변동 (AI 판단 기반)
+        // 호감도 변동 (AI 판단 기반) — 음수 허용 (-50 ~ 100)
         const change = data.affinity_change ?? 3;
-        const newAffinity = Math.max(0, Math.min(100, affinity + change));
+        const newAffinity = Math.max(-50, Math.min(100, affinity + change));
         setAffinity(newAffinity);
         showAffinityChange(change);
+        updateAttachment(newAffinity);
         await updateAffinity(sId, newAffinity);
+
+        // 💔 위기 이벤트: 연속 음수 체크
+        if (change < 0) {
+          const newStreak = negativeStreak + 1;
+          setNegativeStreak(newStreak);
+          if (newStreak >= 3 && !showCrisisEvent) {
+            setTimeout(() => setShowCrisisEvent(true), 1500);
+          }
+        } else {
+          setNegativeStreak(0);
+        }
+
+        // 💀 게임 오버: 호감도 -30 이하
+        if (newAffinity <= -30) {
+          setTimeout(() => setShowGameOver(true), 1500);
+        }
 
         // 누적 호감도 (스테이지 해금용)
         if (change > 0) {
@@ -362,17 +394,33 @@ export default function VisualNovelChat() {
       )}
 
       {/* 호감도 바 - 왼쪽 상단 */}
-      <div className="absolute top-4 left-4 z-30 w-[220px]">
+      <div className="absolute top-4 left-4 z-30 w-[250px]">
         <div className="flex items-center gap-2 mb-1">
-          <span className="text-white text-sm font-bold drop-shadow-lg">💖 호감도</span>
-          <span className="text-white text-sm font-bold drop-shadow-lg">{affinity}/100</span>
+          <span className="text-white text-sm font-bold drop-shadow-lg">
+            {affinity < 0 ? '💔' : '💖'} 호감도
+          </span>
+          <span className={`text-sm font-bold drop-shadow-lg ${affinity < 0 ? 'text-red-400' : 'text-white'}`}>
+            {affinity}/100
+          </span>
           {/* 감정 이모지 */}
           <span className="text-lg">{emotionEmoji[currentEmotion] || '😐'}</span>
+          {/* 애착유형 뱃지 */}
+          {attachmentType === '불안형' && (
+            <span className="bg-red-500/80 text-white text-[10px] px-2 py-0.5 rounded-full animate-pulse font-bold">
+              불안형
+            </span>
+          )}
         </div>
+        {/* 위기 경고 */}
+        {negativeStreak >= 2 && !showCrisisEvent && (
+          <div className="text-red-400 text-xs mb-1 animate-pulse font-bold">
+            ⚠️ 하나가 불안해하고 있어...
+          </div>
+        )}
         <div className="w-full h-4 bg-gray-800/60 rounded-full overflow-hidden border border-white/30">
           <div
             className={`h-full ${getAffinityColor()} rounded-full transition-all duration-500 ease-out`}
-            style={{ width: `${affinity}%` }}
+            style={{ width: `${Math.max(0, affinity)}%` }}
           />
         </div>
         {/* 스테이지 표시 */}
@@ -391,8 +439,14 @@ export default function VisualNovelChat() {
         </div>
       )}
 
-      {/* 캐릭터 - 가운데 배치 (얼굴+상체 보이게) */}
-      <div className="absolute bottom-[170px] left-1/2 -translate-x-1/2 z-10">
+      {/* 캐릭터 - 가운데 배치 (감정별 애니메이션) */}
+      <div className={`absolute bottom-[170px] left-1/2 -translate-x-1/2 z-10 transition-all duration-500
+        ${currentEmotion === 'happy' ? 'animate-char-happy' : ''}
+        ${currentEmotion === 'shy' ? 'animate-char-shy' : ''}
+        ${currentEmotion === 'angry' ? 'animate-char-angry' : ''}
+        ${currentEmotion === 'sad' ? 'animate-char-sad' : ''}
+        ${currentEmotion === 'neutral' ? 'animate-char-idle' : ''}
+      `}>
         <Image
           src="/yuranuggi.png"
           alt="하나"
@@ -400,6 +454,29 @@ export default function VisualNovelChat() {
           height={680}
           className="drop-shadow-[0_10px_25px_rgba(0,0,0,0.5)] object-contain"
         />
+        {/* 감정 이펙트 오버레이 */}
+        {currentEmotion === 'happy' && (
+          <div className="absolute -top-4 left-1/2 -translate-x-1/2 pointer-events-none">
+            <span className="text-3xl animate-bounce inline-block">✨</span>
+            <span className="text-2xl animate-bounce inline-block delay-100">💕</span>
+            <span className="text-3xl animate-bounce inline-block delay-200">✨</span>
+          </div>
+        )}
+        {currentEmotion === 'shy' && (
+          <div className="absolute top-1/4 left-1/2 -translate-x-1/2 pointer-events-none">
+            <span className="text-4xl animate-pulse">💗</span>
+          </div>
+        )}
+        {currentEmotion === 'angry' && (
+          <div className="absolute -top-2 right-1/4 pointer-events-none">
+            <span className="text-3xl animate-ping">💢</span>
+          </div>
+        )}
+        {currentEmotion === 'sad' && (
+          <div className="absolute top-1/3 left-1/2 -translate-x-1/2 pointer-events-none opacity-70">
+            <span className="text-3xl animate-pulse">💧</span>
+          </div>
+        )}
       </div>
 
       {/* 대화상자 - 하단 고정 */}
@@ -507,6 +584,123 @@ export default function VisualNovelChat() {
                            hover:bg-purple-600 transition shadow-lg shadow-purple-200"
               >
                 로그인 / 회원가입
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 💔 위기 이벤트 모달 */}
+      {showCrisisEvent && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md">
+          <div className="bg-gradient-to-b from-gray-900 to-gray-800 rounded-2xl p-8 max-w-md w-full mx-4 text-center shadow-2xl border border-red-500/30">
+            <div className="text-5xl mb-4 animate-pulse">💔</div>
+            <h2 className="text-2xl font-bold text-red-400 mb-3">위기...</h2>
+            <p className="text-gray-300 mb-2 text-lg">
+              하나가 고개를 돌렸다...
+            </p>
+            <p className="text-white mb-6 text-xl font-bold italic">
+              &quot;...우리 이만 그만 볼까.&quot;
+            </p>
+
+            <div className="flex flex-col gap-3">
+              <button
+                onClick={() => {
+                  setShowCrisisEvent(false);
+                  setNegativeStreak(0);
+                  const newAffinity = Math.min(100, affinity + 10);
+                  setAffinity(newAffinity);
+                  updateAttachment(newAffinity);
+                  showAffinityChange(10);
+                  setCurrentEmotion('shy');
+                  setCurrentAIMessage('...진짜? 미안하다고 하면 다 괜찮은 거 아닌데... 근데 네가 그렇게 말하니까 좀 풀리네. 바보.');
+                  setDisplayedText('');
+                  setIsTyping(true);
+                }}
+                className="w-full py-3 rounded-xl bg-pink-500 text-white font-bold
+                           hover:bg-pink-600 transition shadow-lg shadow-pink-200/20"
+              >
+                💕 미안해, 진심이 아니었어 (+10)
+              </button>
+              <button
+                onClick={() => {
+                  setShowCrisisEvent(false);
+                  setNegativeStreak(0);
+                  const newAffinity = Math.max(-50, affinity - 20);
+                  setAffinity(newAffinity);
+                  updateAttachment(newAffinity);
+                  showAffinityChange(-20);
+                  setCurrentEmotion('sad');
+                  setCurrentAIMessage('...그래. 알겠어. 나도 더 이상 어떻게 해야 할지 모르겠어.');
+                  setDisplayedText('');
+                  setIsTyping(true);
+                  if (newAffinity <= -30) {
+                    setTimeout(() => setShowGameOver(true), 2000);
+                  }
+                }}
+                className="w-full py-3 rounded-xl border-2 border-gray-600 text-gray-300 font-bold
+                           hover:bg-gray-700 transition"
+              >
+                😐 알겠어, 네 맘대로 해 (-20)
+              </button>
+              <button
+                onClick={() => {
+                  setShowCrisisEvent(false);
+                  setNegativeStreak(0);
+                  const newAffinity = Math.min(100, affinity + 20);
+                  setAffinity(newAffinity);
+                  updateAttachment(newAffinity);
+                  showAffinityChange(20);
+                  setCurrentEmotion('happy');
+                  setCurrentAIMessage('...!! 갑자기 그런 말 하면... 심장이 터질 것 같잖아... 바보 바보 바보!! 💕');
+                  setDisplayedText('');
+                  setIsTyping(true);
+                }}
+                className="w-full py-3 rounded-xl bg-red-500 text-white font-bold
+                           hover:bg-red-600 transition shadow-lg shadow-red-200/20"
+              >
+                ❤️ 잠깐! 사실 너한테 하고 싶은 말이 있어 (+20)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 💀 게임 오버 */}
+      {showGameOver && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 backdrop-blur-lg">
+          <div className="text-center max-w-md mx-4">
+            <div className="text-6xl mb-6 animate-pulse">💀</div>
+            <h2 className="text-3xl font-bold text-red-500 mb-4">Game Over</h2>
+            <p className="text-gray-400 mb-2 text-lg">
+              하나가 떠났습니다...
+            </p>
+            <p className="text-gray-500 mb-8 text-sm italic">
+              &quot;더 이상은 힘들어... 안녕.&quot;
+            </p>
+            <div className="flex gap-3 justify-center">
+              <button
+                onClick={() => {
+                  setShowGameOver(false);
+                  setAffinity(20);
+                  setNegativeStreak(0);
+                  setAttachmentType('안정형');
+                  setChatHistory([]);
+                  setCurrentAIMessage('');
+                  setDisplayedText('');
+                  sendToAI([], sessionId || 'guest', true);
+                }}
+                className="px-6 py-3 rounded-xl bg-pink-500 text-white font-bold
+                           hover:bg-pink-600 transition"
+              >
+                🔄 처음부터 다시 시작
+              </button>
+              <button
+                onClick={() => window.location.href = '/game'}
+                className="px-6 py-3 rounded-xl border-2 border-gray-600 text-gray-400 font-bold
+                           hover:bg-gray-800 transition"
+              >
+                🏠 스테이지 선택
               </button>
             </div>
           </div>
